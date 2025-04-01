@@ -1,0 +1,590 @@
+---
+title: "pilot EEG ERP analysis"
+author: "Christopher"
+date: "17 3 2025"
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    theme: flatly
+---
+
+
+
+```{r load_package, message = FALSE, warning = FALSE}
+library(lme4)
+library(readxl)
+library(tidyverse)
+library(data.table)
+library(tidyverse)
+library(afex)
+library(broom)
+library(apa)
+library(kableExtra)
+library(lmerTest)
+library(pbkrtest)
+library(effects)
+library(visreg)
+library(sjPlot)
+library(broom.mixed)
+library(pander)
+library(mediation)
+library(multcomp)
+library(multcompView)
+library(magrittr)
+library(multipanelfigure)
+library(ggbeeswarm)
+library(lsmeans)
+library(BayesFactor)
+library(ggpubr)
+library(gpairs)
+library(DescTools)
+library(cowplot)
+library(ggpol)
+library(psych)
+
+library(ggdist)
+
+source('C:/Users/psy05cvd/Dropbox/work/R-statistics/general_functions/RainCloudPlots/tutorial_R/R_rainclouds.R')
+
+
+
+
+
+# broad cluster
+# CSD based normalized to pre-cue baseline in %
+# 
+DATAPath_ERP = "data_in/ERP_pilotdata_LargeLateralClust_03-31-2025_13-41.csv"
+DATAPath_SSVEP = "data_in/FFT_SSVEP_pilotdata_04-01-2025_08-48.csv"
+
+
+
+
+
+options(scipen=1, digits=5)
+```
+<style type="text/css">
+.main-container {
+  max-width: 1800px !important;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+
+## Prepare data  
+<br>  
+
+1.  Read in data: 
+    + `r DATAPath`
+    
+<br>  
+
+```{r load_data,results = "hide", fig.show = "hide", warning = FALSE}
+# read in data
+DataIn_ERP <- read_delim(DATAPath_ERP, delim = ';') %>%
+  mutate(participants = as.factor(participants)) %>%
+  mutate(time_label = factor(time_label, levels = c("tracking","retention","probe"), ordered = T))
+head(DataIn_ERP)
+str(DataIn_ERP)
+
+DataIn_SSVEP <- read_delim(DATAPath_SSVEP, delim = ';') %>%
+  mutate(participants = as.factor(participants)) %>%
+  mutate(time_label = factor(time_label, levels = c("tracking","retention","probe"), ordered = T))
+
+# unique(DataIn_ERP$participants)
+
+
+```
+
+
+## Illustrate behavioral data for main experiment for different conditions
+
+<br>  
+
+```{r plot_data_avg, results = "hide",  fig.height=2, fig.width=4, warning = FALSE}
+
+dat2plot <- DataIn_ERP %>%
+  dplyr::select(-elecs)%>%
+  pivot_wider(names_from = "elec_label", values_from = "amplitude")%>%
+  mutate(`contra-ipsi` = `contra`-`ipsi`)%>%
+  pivot_longer(cols=`ipsi`:`contra-ipsi`, names_to = "signal", values_to = "amplitude")%>%
+  group_by(participants, con_label3, time, time_label, signal) %>%
+  summarise(amplitude = mean(amplitude))%>%
+  filter(signal == "contra-ipsi")
+
+
+# plot ERP components
+theme_set(theme_bw())
+ggplot(dat2plot, aes(x = con_label3, y = amplitude, fill = con_label3)) +
+  geom_hline(yintercept = 0, color = "grey20", size = 0.5) +
+  geom_line(aes(group = participants),colour = "grey60",alpha = 1,size =1) +
+  geom_beeswarm(aes(color = con_label3, x = con_label3,group = con_label3), cex=1.5, size = 3.5,alpha=1,fill="grey40",shape=21)+
+  stat_summary(fun.y=mean, aes(ymin=..y.., ymax=..y.., color = con_label3), geom='errorbar', width=1.1, size=1.5) +
+  facet_wrap(~time_label) +
+  scale_fill_manual(values=c("#F1831A", "#293C4A", "#198A83"))+
+  scale_color_manual(values=c("#F1831A", "#293C4A", "#198A83"))+
+  ylab(expression(paste("amplitude in ", mu, "V/cm²")))
+  # theme(axis.title.x=element_blank(),
+  #       axis.text.x=element_blank(),
+  #       axis.ticks.x=element_blank())
+
+
+
+
+```
+
+
+
+## Display behavioral data for main experiment numerically
+
+<br>  
+
+```{r disp_data_avg, warning = FALSE}
+dat2plot <- DataIn_ERP %>%
+  group_by(participant, con3label) %>%
+  mutate(event_num = n())%>%
+  group_by(participant, con3label,event_response_type)%>%
+  summarise(
+    RT_Mean=mean(event_response_RT),
+    RT_STD=sd(event_response_RT),
+    N=n(),
+    Rate= (n()/first(event_num))*100
+    ) %>%
+  ungroup()%>%
+  complete(participant, con3label, event_response_type,
+           fill=list(RT_Mean=NaN, RT_STD=NaN, RT_resp=NaN, N=0, Rate=0))
+
+dat2plot  %>%
+  group_by(event_response_type, con3label)%>%
+  summarise(N = n(), mean_RT = mean(RT_Mean), std_RT = sd(RT_Mean), mean_rate = mean(Rate), std_rate = sd(Rate)) %>%
+  kable(escape = F, digits = c(3,3,3,3,3,3,3,3,3,3), caption = c("descriptives of behavioral measures")) %>%
+  kable_styling("striped", full_width = T, bootstrap_options = c("striped", "hover", "condensed", "responsive",font_size = 8))
+
+```
+
+
+
+## Display behavioral data for pre-cue experiment numerically
+
+<br>  
+
+```{r disp_data_avg_precue, warning = FALSE}
+dat2plot <- DataIn %>%
+  group_by(participant) %>%
+  mutate(event_num = sum(precue_eventnum))%>%
+  group_by(participant,precue_event_response_type) %>%
+  filter(precue_event_response_type %in% c("hit","error","miss"))%>%
+  summarise(
+    RT_Mean=mean(precue_event_response_RT),
+    RT_STD=sd(precue_event_response_RT),
+    N=n(),
+    Rate= (n()/first(event_num))*100
+    ) %>%
+  ungroup()%>%
+  complete(participant, precue_event_response_type,
+           fill=list(RT_Mean=NaN, RT_STD=NaN, RT_resp=NaN, N=0, Rate=0))
+
+dat2plot  %>%
+  group_by(precue_event_response_type)%>%
+  summarise(N = n(), mean_RT = mean(RT_Mean), std_RT = sd(RT_Mean), mean_rate = mean(Rate), std_rate = sd(Rate)) %>%
+  kable(escape = F, digits = c(3,3,3,3,3,3,3,3,3,3), caption = c("descriptives of pre cue behavioral measures")) %>%
+  kable_styling("striped", full_width = T, bootstrap_options = c("striped", "hover", "condensed", "responsive",font_size = 8))
+
+```
+
+
+## Illustrate single trial RT data for main experiment for different conditions
+
+<br>  
+
+```{r plot_data_singletrial_RT, results = "hide",  fig.height=4, fig.width=3.5, warning = FALSE}
+
+dat2plot <- DataIn %>%
+  filter(event_response_type %in% c("hit"))
+
+
+plot1 <-
+  ggplot(dat2plot, aes(
+    x = event_response_RT, 
+    fill = con3label, fill_ramp = after_stat(abs(x)), 
+    color_ramp = after_stat(-dnorm(x, 0, 2))
+  )) +
+  stat_slab(
+    height = 2, color = "gray15",
+    expand = TRUE, trim = TRUE,
+    fill_type = "segments",
+    show.legend = FALSE,
+    position = position_dodgejust(0.3),
+  )+
+  theme(axis.text.y=element_blank(),axis.ticks.y=element_blank(), axis.title.y = element_blank())+
+  theme(axis.text.x=element_blank(),axis.ticks.x=element_blank(), axis.title.x = element_blank())+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  scale_fill_manual(values=c("#F1831A", "#293C4A", "#198A83")) +
+  scale_color_manual(values=c("#F1831A", "#293C4A", "#198A83"))+
+  xlim(c(100, 1500))
+
+plot2 <-
+  ggplot(dat2plot, aes(
+    x = event_response_RT, 
+    fill = con3label
+  )) +
+  stat_pointinterval(position = position_dodge(width = .4, preserve = "single"), 
+                     aes(color=con3label), .width= c(.68, .95)) +
+  theme(axis.text.y=element_blank(),axis.ticks.y=element_blank(), axis.title.y = element_blank())+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  scale_x_continuous(name="RT in ms", breaks=c(200,400,600,800,1000,1200,1400), labels=waiver(), limits=c(100,1500))+
+  scale_fill_manual(values=c("#F1831A", "#293C4A", "#198A83")) +
+  scale_color_manual(values=c("#F1831A", "#293C4A", "#198A83"))
+  
+
+
+# cowplot::plot_grid(plot1, plot2, plot3, ncol = 3,labels = "AUTO")
+plotttitle <- ggdraw() + draw_label("RT for hits in ms", fontface='bold')
+plotplots <- ggarrange(plot1, plot2, nrow = 2, align = "v", heights =c(4,2), common.legend = TRUE)
+g<-ggarrange(plotttitle, plotplots, nrow = 2, heights=c(0.1, 1))
+
+print(g)
+# ggsave(filename = "figures/RT_distribution_validityeffects.eps", width = 5, height = 3.5,
+#        plot = print(g))
+
+```
+
+## Statistical analysis
+
+### ANOVA models
+### linear mixed models
+
+#### test RT, Hitrate, error rate and miss rate differences between conditions
+
+<br> 
+
+```{r lme_RT_lum, fig.show = "hide", warning = FALSE, fig.height=4, fig.width=10}
+dat2plot <- DataIn %>%
+  group_by(participant, con3label) %>%
+  mutate(event_num = n())%>%
+  group_by(participant, con3label,event_response_type)%>%
+  summarise(
+    RT_Mean=mean(event_response_RT),
+    RT_STD=sd(event_response_RT),
+    N=n(),
+    Rate= (n()/first(event_num))*100
+    ) %>%
+  ungroup()%>%
+  complete(participant, con3label, event_response_type,
+           fill=list(RT_Mean=NaN, RT_STD=NaN, RT_resp=NaN, N=0, Rate=0))%>%
+   rename(condition = con3label)
+
+dat2plot %>%
+  group_by(event_response_type)%>%
+  nest()%>%
+  mutate(stats= purrr::map(data, ~broom::tidy(
+    anova(aov_ez(id="participant", dv = "Rate", data = ., within = "condition"))
+  ))) %>%
+  dplyr::select(-data) %>%
+  unnest()%>%
+  ungroup()%>%
+  mutate(
+    `p.value` = cell_spec(ifelse(round(`p.value`,4)<.001,"< .001",round(`p.value`,4)), 
+                        color = ifelse(is.nan(`p.value`),"blue", ifelse(`p.value` < .05, "green", "red")),
+                        bold = ifelse(is.nan(`p.value`),F, ifelse(`p.value` < .05, T,F)),
+                        align = "center")
+  ) %>%
+  dplyr::select(event_response_type, `num.Df`, `den.Df`, MSE, `statistic`, ges, `p.value`) %>%
+  rename(`F` = `statistic`) %>%  
+  kable(escape = F, digits = c(3,3,3,3,3,3,3,3,3), caption = c("repeated measures ANOVA for rates | rates ~ condition")) %>%
+  kable_styling("striped", full_width = T, bootstrap_options = c("striped", "hover", "condensed", "responsive",font_size = 8))
+
+
+StatsOut <- dat2plot %>%
+  filter(event_response_type %in% c("hit","error")) %>%
+  aov_ez(id="participant", dv = "RT_Mean", data = ., within = c("condition","event_response_type"), 
+         include_aov = afex_options("include_aov"))
+
+StatsOut%>%
+  .$anova %>% 
+  mutate(factor = rownames(.))%>% 
+  mutate( 
+    `Pr(>F)` = cell_spec(ifelse(round(`Pr(>F)`,4)<.001,"< .001",round(`Pr(>F)`,4)), 
+                        color = ifelse(is.nan(`Pr(>F)`),"blue", ifelse(`Pr(>F)` < .05, "green", "red")), 
+                        bold = ifelse(is.nan(`Pr(>F)`),F, ifelse(`Pr(>F)` < .05, T,F)), 
+                        align = "center") 
+  ) %>% 
+  dplyr::select(`num Df`, `den Df`, MSE, `F`, ges, `Pr(>F)`) %>% 
+  kable(escape = F, digits = c(3,3,3,3,3,3,3,3,3), caption = c("repeated measures ANOVA | for hits and errors only | dv = RT in ms")) %>% 
+  kable_styling("striped", full_width = T, bootstrap_options = c("striped", "hover", "condensed", "responsive",font_size = 6)) 
+```
+
+
+ dat2plot2 <- DataIn2 %>%
+  mutate(`FA_all`= FA + `FA_proper`)%>%
+  # dplyr::select(-FA)%>%
+  dplyr::select(-FA_all)%>%
+  pivot_longer(c(-subject ),names_to = "FA_type", values_to = "number")%>%
+  filter(FA_type=='FA_proper' | FA_type=='FA')
+
+
+dat2plot <- DATA_Trials %>%
+  group_by(participant,colorlum)%>%
+  summarise(RT_Mean=mean(RT,na.rm=TRUE),RT_STD=sd(RT,na.rm=TRUE),Hitrate=(sum(response=='hit')/n())*100)
+
+dat2plot2 <- DataIn2 %>%
+  mutate(`FA_all`= FA + `FA_proper`)%>%
+  # dplyr::select(-FA)%>%
+  dplyr::select(-FA_all)%>%
+  rename(participant=subject)
+
+dat2plot_all <- merge(dat2plot,dat2plot2) %>%
+  mutate(
+    d_prime = qnorm(Hitrate/100)-qnorm(FA_proper_rate),
+    c = -0.5*(qnorm(Hitrate/100)+qnorm(FA_proper_rate))
+  )
+
+
+# # statisticical analysis ANOVA
+# StatsOut <- dat2plot_all %>%
+#   aov_ez(id="participant", dv = "RT_Mean", data = ., between = c("colorlum"), include_aov = afex_options("include_aov")) 
+#
+# StatsOut%>%
+#   .$anova %>% -->
+#   mutate(factor = rownames(.))%>% -->
+#   mutate( -->
+#     `Pr(>F)` = cell_spec(ifelse(round(`Pr(>F)`,4)<.001,"< .001",round(`Pr(>F)`,4)), -->
+#                         color = ifelse(is.nan(`Pr(>F)`),"blue", ifelse(`Pr(>F)` < .05, "green", "red")), -->
+#                         bold = ifelse(is.nan(`Pr(>F)`),F, ifelse(`Pr(>F)` < .05, T,F)), -->
+#                         align = "center") -->
+#   ) %>% -->
+#   dplyr::select(`num Df`, `den Df`, MSE, `F`, ges, `Pr(>F)`) %>% -->
+#   kable(escape = F, digits = c(3,3,3,3,3,3,3,3,3), caption = c("ANOVA | dv = RT in ms")) %>% -->
+#   kable_styling("striped", full_width = T, bootstrap_options = c("striped", "hover", "condensed", "responsive",font_size = 6)) -->
+
+
+# RT
+dat2plot_all %>%
+  nest() %>%
+  mutate(
+    stats = map(data, ~ broom::tidy(t.test(RT_Mean ~ colorlum, data = ., paired = FALSE))),
+    t_test_bf = map(data, ~ extractBF(ttestBF(formula = RT_Mean ~ colorlum, data = ., iterations = num.iter, rscale = sqrt(2)/2))),
+    meanval = map(data, ~ .x %>%
+                    group_by(colorlum) %>%
+                    summarise(
+                      mean_RT_Mean = mean(RT_Mean, na.rm = TRUE),
+                      std_RT_Mean = sd(RT_Mean, na.rm = TRUE)
+                    ) %>%
+                    pivot_wider(names_from = colorlum, 
+                                values_from = c(mean_RT_Mean, std_RT_Mean), 
+                                names_sep = "_")
+    ),
+    cohens_d = map(data, ~ rstatix::cohens_d(RT_Mean ~ colorlum, data = ., paired = FALSE))
+  ) %>%
+  unnest(cols = c(stats, cohens_d, t_test_bf, meanval))%>%
+  mutate(BF10 = bf, BF01 = 1/bf, 
+         M_RT_iso = mean_RT_Mean_isolum__to_bckgrd,
+         SD_RT_iso = std_RT_Mean_isolum__to_bckgrd,
+         M_RT_off = mean_RT_Mean_offset_to_bckgrd,
+         SD_RT_off = std_RT_Mean_offset_to_bckgrd,
+         diff=estimate,
+         CohensD = effsize, t.value=statistic, df = parameter)%>%
+  dplyr::select(M_RT_iso, SD_RT_iso, M_RT_off, SD_RT_off, diff, t.value, df, p.value, CohensD, BF10, BF01)%>%
+  # mutate(p.value = p.adjust(p.value, method="holm")) %>% # none, holm
+  # mutate(p.value = p.adjust(p.value, method="none")) %>% # none, holm
+  ungroup()%>%
+  mutate(
+    p.value = cell_spec(ifelse(round(p.value,4)<.001,"< .001",round(p.value,4)), 
+                        color = ifelse(is.nan(p.value),"blue", ifelse(p.value < .05, "green", "red")),
+                        bold = ifelse(is.nan(p.value),F, ifelse(p.value < .05, T,F)),
+                        align = "center")
+  ) %>%
+  kable(escape = F, digits = c(3,3,3,3,3,3,3,3,3), 
+        caption = c("RT | modulation by stimulus display group (isolum vs lum offset) | t-tests of difference")) %>%
+  kable_styling("striped", full_width = T, bootstrap_options = c("striped", "hover", "condensed", "responsive",font_size = 8))
+```
+
+**Hitrate** ~ **luminance**
+
+<br> 
+
+```{r lme_HR_lum, fig.show = "hide", warning = FALSE, fig.height=4, fig.width=10}
+# Hitrate
+dat2plot_all %>%
+  nest() %>%
+  mutate(
+    stats = map(data, ~ broom::tidy(t.test(Hitrate ~ colorlum, data = ., paired = FALSE))),
+    t_test_bf = map(data, ~ extractBF(ttestBF(formula = Hitrate ~ colorlum, data = ., iterations = num.iter, rscale = sqrt(2)/2))),
+    meanval = map(data, ~ .x %>%
+                    group_by(colorlum) %>%
+                    summarise(
+                      mean_HR_Mean = mean(Hitrate, na.rm = TRUE),
+                      std_HR_Mean = sd(Hitrate, na.rm = TRUE)
+                    ) %>%
+                    pivot_wider(names_from = colorlum, 
+                                values_from = c(mean_HR_Mean, std_HR_Mean), 
+                                names_sep = "_")
+    ),
+    cohens_d = map(data, ~ rstatix::cohens_d(Hitrate ~ colorlum, data = ., paired = FALSE))
+  ) %>%
+  unnest(cols = c(stats, cohens_d, t_test_bf, meanval))%>%
+  mutate(BF10 = bf, BF01 = 1/bf, 
+         M_HR_iso = mean_HR_Mean_isolum__to_bckgrd,
+         SD_HR_iso = std_HR_Mean_isolum__to_bckgrd,
+         M_HR_off = mean_HR_Mean_offset_to_bckgrd,
+         SD_HR_off = std_HR_Mean_offset_to_bckgrd,
+         diff=estimate,
+         CohensD = effsize, t.value=statistic, df = parameter)%>%
+  dplyr::select(M_HR_iso, SD_HR_iso, M_HR_off, SD_HR_off, diff, t.value, df, p.value, CohensD, BF10, BF01)%>%
+  # mutate(p.value = p.adjust(p.value, method="holm")) %>% # none, holm
+  # mutate(p.value = p.adjust(p.value, method="none")) %>% # none, holm
+  ungroup()%>%
+  mutate(
+    p.value = cell_spec(ifelse(round(p.value,4)<.001,"< .001",round(p.value,4)), 
+                        color = ifelse(is.nan(p.value),"blue", ifelse(p.value < .05, "green", "red")),
+                        bold = ifelse(is.nan(p.value),F, ifelse(p.value < .05, T,F)),
+                        align = "center")
+  ) %>%
+  kable(escape = F, digits = c(3,3,3,3,3,3,3,3,3), 
+        caption = c("Hitrate | modulation by stimulus display group (isolum vs lum offset) | t-tests of difference")) %>%
+  kable_styling("striped", full_width = T, bootstrap_options = c("striped", "hover", "condensed", "responsive",font_size = 8))
+```
+
+**FArate** ~ **luminance**
+
+<br> 
+
+```{r lme_FAR_lum, fig.show = "hide", warning = FALSE, fig.height=4, fig.width=10}
+# FArate
+dat2plot_all %>%
+  nest() %>%
+  mutate(
+    stats = map(data, ~ broom::tidy(t.test(FA_proper_rate ~ colorlum, data = ., paired = FALSE))),
+    t_test_bf = map(data, ~ extractBF(ttestBF(formula = FA_proper_rate ~ colorlum, data = ., iterations = num.iter, rscale = sqrt(2)/2))),
+    meanval = map(data, ~ .x %>%
+                    group_by(colorlum) %>%
+                    summarise(
+                      mean_FAR_Mean = mean(FA_proper_rate, na.rm = TRUE),
+                      std_FAR_Mean = sd(FA_proper_rate, na.rm = TRUE)
+                    ) %>%
+                    pivot_wider(names_from = colorlum, 
+                                values_from = c(mean_FAR_Mean, std_FAR_Mean), 
+                                names_sep = "_")
+    ),
+    cohens_d = map(data, ~ rstatix::cohens_d(FA_proper_rate ~ colorlum, data = ., paired = FALSE))
+  ) %>%
+  unnest(cols = c(stats, cohens_d, t_test_bf, meanval))%>%
+  mutate(BF10 = bf, BF01 = 1/bf, 
+         M_FAR_iso = mean_FAR_Mean_isolum__to_bckgrd,
+         SD_FAR_iso = std_FAR_Mean_isolum__to_bckgrd,
+         M_FAR_off = mean_FAR_Mean_offset_to_bckgrd,
+         SD_FAR_off = std_FAR_Mean_offset_to_bckgrd,
+         diff=estimate,
+         CohensD = effsize, t.value=statistic, df = parameter)%>%
+  dplyr::select(M_FAR_iso, SD_FAR_iso, M_FAR_off, SD_FAR_off, diff, t.value, df, p.value, CohensD, BF10, BF01)%>%
+  # mutate(p.value = p.adjust(p.value, method="holm")) %>% # none, holm
+  # mutate(p.value = p.adjust(p.value, method="none")) %>% # none, holm
+  ungroup()%>%
+  mutate(
+    p.value = cell_spec(ifelse(round(p.value,4)<.001,"< .001",round(p.value,4)), 
+                        color = ifelse(is.nan(p.value),"blue", ifelse(p.value < .05, "green", "red")),
+                        bold = ifelse(is.nan(p.value),F, ifelse(p.value < .05, T,F)),
+                        align = "center")
+  ) %>%
+  kable(escape = F, digits = c(3,3,3,3,3,3,3,3,3), 
+        caption = c("FA-rate | modulation by stimulus display group (isolum vs lum offset) | t-tests of difference")) %>%
+  kable_styling("striped", full_width = T, bootstrap_options = c("striped", "hover", "condensed", "responsive",font_size = 8))
+
+
+```
+
+**d-prime** ~ **luminance**
+
+<br> 
+
+```{r lme_dprime_lum, fig.show = "hide", warning = FALSE, fig.height=4, fig.width=10}
+# d-prime
+dat2plot_all %>%
+  nest() %>%
+  mutate(
+    stats = map(data, ~ broom::tidy(t.test(d_prime ~ colorlum, data = ., paired = FALSE))),
+    t_test_bf = map(data, ~ extractBF(ttestBF(formula = d_prime ~ colorlum, data = ., iterations = num.iter, rscale = sqrt(2)/2))),
+    meanval = map(data, ~ .x %>%
+                    group_by(colorlum) %>%
+                    summarise(
+                      mean_d_Mean = mean(d_prime, na.rm = TRUE),
+                      std_d_Mean = sd(d_prime, na.rm = TRUE)
+                    ) %>%
+                    pivot_wider(names_from = colorlum, 
+                                values_from = c(mean_d_Mean, std_d_Mean), 
+                                names_sep = "_")
+    ),
+    cohens_d = map(data, ~ rstatix::cohens_d(d_prime ~ colorlum, data = ., paired = FALSE))
+  ) %>%
+  unnest(cols = c(stats, cohens_d, t_test_bf, meanval))%>%
+  mutate(BF10 = bf, BF01 = 1/bf, 
+         M_d_iso = mean_d_Mean_isolum__to_bckgrd,
+         SD_d_iso = std_d_Mean_isolum__to_bckgrd,
+         M_d_off = mean_d_Mean_offset_to_bckgrd,
+         SD_d_off = std_d_Mean_offset_to_bckgrd,
+         diff=estimate,
+         CohensD = effsize, t.value=statistic, df = parameter)%>%
+  dplyr::select(M_d_iso, SD_d_iso, M_d_off, SD_d_off, diff, t.value, df, p.value, CohensD, BF10, BF01)%>%
+  # mutate(p.value = p.adjust(p.value, method="holm")) %>% # none, holm
+  # mutate(p.value = p.adjust(p.value, method="none")) %>% # none, holm
+  ungroup()%>%
+  mutate(
+    p.value = cell_spec(ifelse(round(p.value,4)<.001,"< .001",round(p.value,4)), 
+                        color = ifelse(is.nan(p.value),"blue", ifelse(p.value < .05, "green", "red")),
+                        bold = ifelse(is.nan(p.value),F, ifelse(p.value < .05, T,F)),
+                        align = "center")
+  ) %>%
+  kable(escape = F, digits = c(3,3,3,3,3,3,3,3,3), 
+        caption = c("d-prime | modulation by stimulus display group (isolum vs lum offset) | t-tests of difference")) %>%
+  kable_styling("striped", full_width = T, bootstrap_options = c("striped", "hover", "condensed", "responsive",font_size = 8))
+```
+
+**c criterion** ~ **luminance**
+
+<br> 
+
+```{r lme_c_lum, fig.show = "hide", warning = FALSE, fig.height=4, fig.width=10}
+# d-prime
+dat2plot_all %>%
+  nest() %>%
+  mutate(
+    stats = map(data, ~ broom::tidy(t.test(c ~ colorlum, data = ., paired = FALSE))),
+    t_test_bf = map(data, ~ extractBF(ttestBF(formula = c ~ colorlum, data = ., iterations = num.iter, rscale = sqrt(2)/2))),
+    meanval = map(data, ~ .x %>%
+                    group_by(colorlum) %>%
+                    summarise(
+                      mean_c_Mean = mean(c, na.rm = TRUE),
+                      std_c_Mean = sd(c, na.rm = TRUE)
+                    ) %>%
+                    pivot_wider(names_from = colorlum,
+                                values_from = c(mean_c_Mean, std_c_Mean),
+                                names_sep = "_")
+    ),
+    cohens_d = map(data, ~ rstatix::cohens_d(c ~ colorlum, data = ., paired = FALSE))
+  ) %>%
+  unnest(cols = c(stats, cohens_d, t_test_bf, meanval))%>%
+  mutate(BF10 = bf, BF01 = 1/bf, 
+         M_c_iso = mean_c_Mean_isolum__to_bckgrd,
+         SD_c_iso = std_c_Mean_isolum__to_bckgrd,
+         M_c_off = mean_c_Mean_offset_to_bckgrd,
+         SD_c_off = std_c_Mean_offset_to_bckgrd,
+         diff=estimate,
+         CohensD = effsize, t.value=statistic, df = parameter)%>%
+  dplyr::select(M_c_iso, SD_c_iso, M_c_off, SD_c_off, diff, t.value, df, p.value, CohensD, BF10, BF01)%>%
+  # mutate(p.value = p.adjust(p.value, method="holm")) %>% # none, holm
+  # mutate(p.value = p.adjust(p.value, method="none")) %>% # none, holm
+  ungroup()%>%
+  mutate(
+    p.value = cell_spec(ifelse(round(p.value,4)<.001,"< .001",round(p.value,4)), 
+                        color = ifelse(is.nan(p.value),"blue", ifelse(p.value < .05, "green", "red")),
+                        bold = ifelse(is.nan(p.value),F, ifelse(p.value < .05, T,F)),
+                        align = "center")
+  ) %>%
+  kable(escape = F, digits = c(3,3,3,3,3,3,3,3,3), 
+        caption = c("criterion | modulation by stimulus display group (isolum vs lum offset) | t-tests of difference")) %>%
+  kable_styling("striped", full_width = T, bootstrap_options = c("striped", "hover", "condensed", "responsive",font_size = 8))
+```
+
